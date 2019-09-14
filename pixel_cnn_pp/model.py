@@ -3,8 +3,12 @@ The core Pixel-CNN model
 """
 
 import numpy as np
-import tensorflow as tf
-from tensorflow.contrib.framework.python.ops import arg_scope
+# import tensorflow as tf
+import tensorflow.compat.v1 as tf
+tf.disable_v2_behavior()
+# from tensorflow.contrib.framework.python.ops import arg_scope
+from utils import arg_scope
+
 import pixel_cnn_pp.nn as nn
 
 def model_spec(x, h=None, init=False, ema=None, dropout_p=0.5, nr_resnet=5, nr_filters=160, nr_logistic_mix=10, resnet_nonlinearity='concat_elu', energy_distance=False):
@@ -17,7 +21,7 @@ def model_spec(x, h=None, init=False, ema=None, dropout_p=0.5, nr_resnet=5, nr_f
     """
 
     counters = {}
-    with arg_scope([nn.conv2d, nn.deconv2d, nn.gated_resnet, nn.dense], counters=counters, init=init, ema=ema, dropout_p=dropout_p):
+    with arg_scope.arg_scope([nn.conv2d, nn.deconv2d, nn.gated_resnet, nn.dense], counters=counters, init=init, ema=ema, dropout_p=dropout_p):
 
         # parse resnet nonlinearity argument
         if resnet_nonlinearity == 'concat_elu':
@@ -29,7 +33,7 @@ def model_spec(x, h=None, init=False, ema=None, dropout_p=0.5, nr_resnet=5, nr_f
         else:
             raise('resnet nonlinearity ' + resnet_nonlinearity + ' is not supported')
 
-        with arg_scope([nn.gated_resnet], nonlinearity=resnet_nonlinearity, h=h):
+        with arg_scope.arg_scope([nn.gated_resnet], nonlinearity=resnet_nonlinearity, h=h):
 
             # ////////// up pass through pixelCNN ////////
             xs = nn.int_shape(x)

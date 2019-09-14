@@ -8,6 +8,9 @@ import sys
 import tarfile
 from six.moves import urllib
 import numpy as np
+import scipy.io
+
+svd = None
 
 def maybe_download_and_extract(data_dir, url='http://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz'):
     if not os.path.exists(os.path.join(data_dir, 'cifar-10-batches-py')):
@@ -43,19 +46,30 @@ def load(data_dir, subset='train'):
         train_data = [unpickle(os.path.join(data_dir,'cifar-10-batches-py','data_batch_' + str(i))) for i in range(1,6)]
         trainx = np.concatenate([d['x'] for d in train_data],axis=0)
         trainy = np.concatenate([d['y'] for d in train_data],axis=0)
+        trainx = np.transpose(trainx, (0, 2, 3, 1))
+        trainx = trainx/128 - 1
         return trainx, trainy
     elif subset=='test':
         test_data = unpickle(os.path.join(data_dir,'cifar-10-batches-py','test_batch'))
         testx = test_data['x']
         testy = test_data['y']
+        testx = np.transpose(testx, (0, 2, 3, 1))
+        testx = testx/128 - 1
         return testx, testy
+    elif subset=='val':
+        svhn = scipy.io.loadmat(r'C:\Users\justjo\Downloads\public_datasets\SVHN.mat')
+        svhndata = np.moveaxis(svhn['X'], 3, 0)
+        svhndata = np.reshape(svhndata, (svhndata.shape[0], -1))
+        svhndata = svhndata/128 - 1
+        svhnlabels = svhn['y']
+        return svhndata, svhnlabels
     else:
         raise NotImplementedError('subset should be either train or test')
 
 class DataLoader(object):
     """ an object that generates batches of CIFAR-10 data for training """
 
-    def __init__(self, data_dir, subset, batch_size, rng=None, shuffle=False, return_labels=False):
+    def __init__(self, data_dir, subset, batch_size, rng=None, shuffle=False, return_labels=False, svd=False):
         """ 
         - data_dir is location where to store files
         - subset is train|test 
@@ -67,6 +81,7 @@ class DataLoader(object):
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.return_labels = return_labels
+        self.svd = svd
 
         # create temporary storage for the data, if not yet created
         if not os.path.exists(data_dir):
@@ -74,8 +89,8 @@ class DataLoader(object):
             os.makedirs(data_dir)
 
         # load CIFAR-10 training data to RAM
-        self.data, self.labels = load(os.path.join(data_dir,'cifar-10-python'), subset=subset)
-        self.data = np.transpose(self.data, (0,2,3,1)) # (N,3,32,32) -> (N,32,32,3)
+        self.data, self.labels = load(os.path.join(data_dir,'cifar-10-python'), subset=subset, )
+        # self.data = np.transpose(self.data, (0,2,3,1)) # (N,3,32,32) -> (N,32,32,3)
         
         self.p = 0 # pointer to where we are in iteration
         self.rng = np.random.RandomState(1) if rng is None else rng

@@ -3,8 +3,10 @@ Various tensorflow utilities
 """
 
 import numpy as np
-import tensorflow as tf
-from tensorflow.contrib.framework.python.ops import add_arg_scope
+import tensorflow.compat.v1 as tf
+# from tensorflow.contrib.framework.python.ops import add_arg_scope
+from utils.arg_scope import add_arg_scope
+
 
 def int_shape(x):
     return list(map(int, x.get_shape()))
