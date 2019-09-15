@@ -88,10 +88,10 @@ rng = np.random.RandomState(args.seed)
 tf.set_random_seed(args.seed)
 
 # energy distance or maximum likelihood?
-if args.energy_distance:
-    loss_fun = nn.energy_distance
-else:
-    loss_fun = nn.discretized_mix_logistic_loss
+# if args.energy_distance:
+#     loss_fun = nn.energy_distance
+# else:
+loss_fun = nn.discretized_mix_logistic_loss
 
 # initialize data loaders for train/test splits
 if args.data_set == 'imagenet' and args.class_conditional:
@@ -104,16 +104,16 @@ elif args.data_set == 'imagenet':
     DataLoader = imagenet_data.DataLoader
 else:
     raise("unsupported dataset")
-train_data = DataLoader(args.data_dir, 'train', args.batch_size * args.nr_gpu, rng=rng, shuffle=True, return_labels=args.class_conditional)
-val_data = DataLoader(args.data_dir, 'val', args.batch_size * args.nr_gpu, shuffle=False, return_labels=args.class_conditional)
-test_data = DataLoader(args.data_dir, 'test', args.batch_size * args.nr_gpu, shuffle=False, return_labels=args.class_conditional)
+train_data = DataLoader(args.data_dir, 'train', args.batch_size, rng=rng, shuffle=True, return_labels=args.class_conditional)
+val_data = DataLoader(args.data_dir, 'val', args.batch_size, shuffle=False, return_labels=args.class_conditional)
+test_data = DataLoader(args.data_dir, 'test', args.batch_size, shuffle=False, return_labels=args.class_conditional)
 obs_shape = train_data.get_observation_size() # e.g. a tuple (32,32,3)
 assert len(obs_shape) == 3, 'assumed right now'
 
 # data place holders
 x_init = tf.placeholder(tf.float32, shape=(args.init_batch_size,) + obs_shape)
-xs = [tf.placeholder(tf.float32, shape=(args.batch_size, ) + obs_shape) for i in range(args.nr_gpu)]
-
+# xs = [tf.placeholder(tf.float32, shape=(args.batch_size, ) + obs_shape) for i in range(args.nr_gpu)]
+xs = tf.placeholder(tf.float32, shape=(args.batch_size, ) + obs_shape)
 #tensorboard stuff
 tf_loss_ph = tf.placeholder(tf.float32,shape=None,name='loss_summary')
 
@@ -139,38 +139,38 @@ model = tf.make_template('model', model_spec)
 init_pass = model(x_init, h_init, init=True, dropout_p=args.dropout_p, **model_opt)
 
 # keep track of moving average
-all_params = tf.trainable_variables()
-ema = tf.train.ExponentialMovingAverage(decay=args.polyak_decay)
-maintain_averages_op = tf.group(ema.apply(all_params))
-ema_params = [ema.average(p) for p in all_params]
+# all_params = tf.trainable_variables()
+# ema = tf.train.ExponentialMovingAverage(decay=args.polyak_decay)
+# maintain_averages_op = tf.group(ema.apply(all_params))
+# ema_params = [ema.average(p) for p in all_params]
 
 # get loss gradients over multiple GPUs + sampling
-grads = []
-loss_gen = []
-loss_gen_test = []
-loss_gen_val = []
-new_x_gen = []
+# grads = []
+# loss_gen = []
+# loss_gen_test = []
+# loss_gen_val = []
+# new_x_gen = []
 # for i in range(args.nr_gpu):
 #     with tf.device('/gpu:%d' % i):
 with tf.device('/gpu:0'):
     # train
-    out = model(xs, hs, ema=None, dropout_p=args.dropout_p, **model_opt)
-    loss_gen.append(loss_fun(tf.stop_gradient(xs), out))
+    out = model(xs, h = None, ema=None, dropout_p=args.dropout_p, **model_opt)
+    loss_gen = loss_fun(tf.stop_gradient(xs), out)
     optimizer = tf.train.AdamOptimizer().minimize(loss_gen)
 
     # gradients
     # grads.append(tf.gradients(loss_gen, all_params, colocate_gradients_with_ops=True))
 
     # test
-    out = model(xs, hs, ema=ema, dropout_p=0., **model_opt)
-    loss_gen_test.append(loss_fun(xs, out))
+    out = model(xs, h=None, ema=None, dropout_p=0., **model_opt)
+    loss_gen_test = loss_fun(xs, out)
 
     # val
-    out = model(xs, hs, ema=ema, dropout_p=0., **model_opt)
-    loss_gen_val.append(loss_fun(xs, out))
+    out = model(xs, h=None, ema=None, dropout_p=0., **model_opt)
+    loss_gen_val = loss_fun(xs, out)
 
     # sample
-    out = model(xs, h_sample, ema=ema, dropout_p=0, **model_opt)
+    # out = model(xs, h_sample, ema=ema, dropout_p=0, **model_opt)
     # if args.energy_distance:
     #     new_x_gen.append(out[0])
     # else:
@@ -190,11 +190,11 @@ with tf.device('/gpu:0'):
 #     optimizer = tf.train.AdamOptimizer().minimize(loss_gen)
 
 # convert loss to bits/dim
-bits_per_dim = loss_gen[0]/(np.log(2.)*np.prod(obs_shape)*args.batch_size)
-bits_per_dim_test = loss_gen_test[0]/(args.nr_gpu*np.log(2.)*np.prod(obs_shape)*args.batch_size)
-bits_per_dim_val = loss_gen_val[0]/(args.nr_gpu*np.log(2.)*np.prod(obs_shape)*args.batch_size)
+bits_per_dim = loss_gen/(np.log(2.)*np.prod(obs_shape)*args.batch_size)
+bits_per_dim_test = loss_gen_test/(np.log(2.)*np.prod(obs_shape)*args.batch_size)
+bits_per_dim_val = loss_gen_val/(np.log(2.)*np.prod(obs_shape)*args.batch_size)
 
-training_summary_batch = tf.summary.scalar("training_accuracy",bits_per_dim) #bits_per_dim
+training_summary_batch = tf.summary.scalar("training_accuracy_batch",bits_per_dim) #bits_per_dim
 training_summary = tf.summary.scalar("training_accuracy",tf_loss_ph) #bits_per_dim
 test_summary = tf.summary.scalar("test_accuracy", tf_loss_ph) #bits_per_dim_test
 validation_summary = tf.summary.scalar("validation_accuracy", tf_loss_ph) #bits_per_dim_val
@@ -214,26 +214,26 @@ initializer = tf.global_variables_initializer()
 saver = tf.train.Saver()
 
 # turn numpy inputs into feed_dict for use with tensorflow
-def make_feed_dict(data, init=False):
-    if type(data) is tuple:
-        x,y = data
-    else:
-        x = data
-        y = None
-    # x = np.cast[np.float32]((x - 127.5) / 127.5) # input to pixelCNN is scaled from uint8 [0,255] to float in range [-1,1]
-    x = np.cast[np.float32](x) # input to pixelCNN is scaled from uint8 [0,255] to float in range [-1,1]
-
-    if init:
-        feed_dict = {x_init: x}
-        if y is not None:
-            feed_dict.update({y_init: y})
-    else:
-        x = np.split(x, args.nr_gpu)
-        feed_dict = {xs[i]: x[i] for i in range(args.nr_gpu)}
-        if y is not None:
-            y = np.split(y, args.nr_gpu)
-            feed_dict.update({ys[i]: y[i] for i in range(args.nr_gpu)})
-    return feed_dict
+# def make_feed_dict(data, init=False):
+#     if type(data) is tuple:
+#         x,y = data
+#     else:
+#         x = data
+#         y = None
+#     # x = np.cast[np.float32]((x - 127.5) / 127.5) # input to pixelCNN is scaled from uint8 [0,255] to float in range [-1,1]
+#     x = np.cast[np.float32](x) # input to pixelCNN is scaled from uint8 [0,255] to float in range [-1,1]
+#
+#     if init:
+#         feed_dict = {x_init: x}
+#         if y is not None:
+#             feed_dict.update({y_init: y})
+#     else:
+#         x = np.split(x, args.nr_gpu)
+#         feed_dict = {xs[i]: x[i] for i in range(args.nr_gpu)}
+#         if y is not None:
+#             y = np.split(y, args.nr_gpu)
+#             feed_dict.update({ys[i]: y[i] for i in range(args.nr_gpu)})
+#     return feed_dict
 
 args.path = os.path.join('checkpoint', 'nr_resnet{}_h{}nr_filters{}_{}'.format(
      args.nr_filters, args.nr_resnet, args.nr_logistic_mix,
@@ -262,7 +262,8 @@ with tf.Session(config=config) as sess:
             else:
                 print('initializing the model...')
                 sess.run(initializer)
-                feed_dict = make_feed_dict(train_data.next(args.init_batch_size), init=True)  # manually retrieve exactly init_batch_size examples
+                # feed_dict = make_feed_dict(train_data.next(args.init_batch_size), init=True)  # manually retrieve exactly init_batch_size examples
+                feed_dict = {x_init: train_data.next(args.init_batch_size).astype(np.float32)}
                 sess.run(init_pass, feed_dict)
             print('starting training')
 
@@ -270,10 +271,11 @@ with tf.Session(config=config) as sess:
         train_losses = []
         mult = len([x for x in train_data])
         for cnt, d in enumerate(train_data):
-            feed_dict = make_feed_dict(d)
+            # feed_dict = make_feed_dict(d)
             # forward/backward/update model on each gpu
             # lr *= args.lr_decay
             # feed_dict.update({ tf_lr: lr })
+            feed_dict = {xs: d}
             l,_, train_summ = sess.run([bits_per_dim, optimizer, training_summary_batch], feed_dict)
             writer.add_summary(train_summ, mult*epoch + cnt)
             train_losses.append(l)
@@ -285,7 +287,8 @@ with tf.Session(config=config) as sess:
         # compute likelihood over test data
         test_losses = []
         for d in test_data:
-            feed_dict = make_feed_dict(d)
+            # feed_dict = make_feed_dict(d)
+            feed_dict = {xs: d}
             l = sess.run(bits_per_dim_test, feed_dict)
             test_losses.append(l)
         test_loss_gen = np.mean(test_losses)
@@ -297,7 +300,8 @@ with tf.Session(config=config) as sess:
         # compute likelihood over validation data
         val_losses = []
         for d in val_data:
-            feed_dict = make_feed_dict(d)
+            # feed_dict = make_feed_dict(d)
+            feed_dict = {xs: d}
             l= sess.run(bits_per_dim_val , feed_dict)
             val_losses.append(l)
         val_loss_gen = np.mean(val_losses)

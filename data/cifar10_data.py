@@ -48,21 +48,21 @@ def load(data_dir, subset='train'):
         trainy = np.concatenate([d['y'] for d in train_data],axis=0)
         trainx = np.transpose(trainx, (0, 2, 3, 1))
         trainx = trainx/128 - 1
-        return trainx, trainy
+        return trainx.astype(np.float32), trainy
     elif subset=='test':
         test_data = unpickle(os.path.join(data_dir,'cifar-10-batches-py','test_batch'))
         testx = test_data['x']
         testy = test_data['y']
         testx = np.transpose(testx, (0, 2, 3, 1))
         testx = testx/128 - 1
-        return testx, testy
+        return testx.astype(np.float32), testy
     elif subset=='val':
         svhn = scipy.io.loadmat(r'C:\Users\justjo\Downloads\public_datasets\SVHN.mat')
         svhndata = np.moveaxis(svhn['X'], 3, 0)
         svhndata = np.reshape(svhndata, (svhndata.shape[0], -1))
         svhndata = svhndata/128 - 1
         svhnlabels = svhn['y']
-        return svhndata, svhnlabels
+        return svhndata.astype(np.float32), svhnlabels
     else:
         raise NotImplementedError('subset should be either train or test')
 
