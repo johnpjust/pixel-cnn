@@ -9,8 +9,7 @@ import tarfile
 from six.moves import urllib
 import numpy as np
 import scipy.io
-
-svd = None
+import sklearn.decomposition
 
 def maybe_download_and_extract(data_dir, url='http://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz'):
     if not os.path.exists(os.path.join(data_dir, 'cifar-10-batches-py')):
@@ -40,7 +39,7 @@ def unpickle(file):
     fo.close()
     return {'x': d['data'].reshape((10000,3,32,32)), 'y': np.array(d['labels']).astype(np.uint8)}
 
-def load(data_dir, subset='train'):
+def load(data_dir, subset='train', svd_mat = None):
     maybe_download_and_extract(data_dir)
     if subset=='train':
         train_data = [unpickle(os.path.join(data_dir,'cifar-10-batches-py','data_batch_' + str(i))) for i in range(1,6)]
@@ -48,20 +47,28 @@ def load(data_dir, subset='train'):
         trainy = np.concatenate([d['y'] for d in train_data],axis=0)
         trainx = np.transpose(trainx, (0, 2, 3, 1))
         trainx = trainx/128 - 1
-        return trainx.astype(np.float32), trainy
+        vh = None
+        if svd_mat:
+            _, _, vh = scipy.linalg.svd(trainx, full_matrices=False)
+            trainx = np.matmul(trainx, vh.T)
+        return trainx.astype(np.float32), trainy, vh
     elif subset=='test':
         test_data = unpickle(os.path.join(data_dir,'cifar-10-batches-py','test_batch'))
         testx = test_data['x']
         testy = test_data['y']
         testx = np.transpose(testx, (0, 2, 3, 1))
         testx = testx/128 - 1
+        if svd_mat:
+            testx = np.matmul(testx, svd_mat.T)
         return testx.astype(np.float32), testy
     elif subset=='val':
         svhn = scipy.io.loadmat(r'C:\Users\justjo\Downloads\public_datasets\SVHN.mat')
         svhndata = np.moveaxis(svhn['X'], 3, 0)
-        svhndata = np.reshape(svhndata, (svhndata.shape[0], -1))
+        # svhndata = np.reshape(svhndata, (svhndata.shape[0], -1))
         svhndata = svhndata/128 - 1
         svhnlabels = svhn['y']
+        if svd_mat:
+            svhndata = np.matmul(svhndata, svd_mat.T)
         return svhndata.astype(np.float32), svhnlabels
     else:
         raise NotImplementedError('subset should be either train or test')
@@ -69,7 +76,7 @@ def load(data_dir, subset='train'):
 class DataLoader(object):
     """ an object that generates batches of CIFAR-10 data for training """
 
-    def __init__(self, data_dir, subset, batch_size, rng=None, shuffle=False, return_labels=False, svd=False):
+    def __init__(self, data_dir, subset, batch_size, rng=None, shuffle=False, return_labels=False, svd_mat = None):
         """ 
         - data_dir is location where to store files
         - subset is train|test 
@@ -81,7 +88,7 @@ class DataLoader(object):
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.return_labels = return_labels
-        self.svd = svd
+        self.svd_mat = svd_mat
 
         # create temporary storage for the data, if not yet created
         if not os.path.exists(data_dir):
@@ -89,7 +96,11 @@ class DataLoader(object):
             os.makedirs(data_dir)
 
         # load CIFAR-10 training data to RAM
-        self.data, self.labels = load(os.path.join(data_dir,'cifar-10-python'), subset=subset, )
+        if subset == 'train':
+            self.data, self.labels, self.svd_mat = load(os.path.join(data_dir,'cifar-10-python'), subset=subset, svd_mat = self.svd_mat)
+        else:
+            self.data, self.labels = load(os.path.join(data_dir, 'cifar-10-python'), subset=subset,
+                                                        svd_mat=self.svd_mat)
         # self.data = np.transpose(self.data, (0,2,3,1)) # (N,3,32,32) -> (N,32,32,3)
         
         self.p = 0 # pointer to where we are in iteration

@@ -58,13 +58,13 @@ class parser_:
 args = parser_()
 
 args.data_dir=r'C:\Users\justjo\Downloads\public_datasets'
-args.save_dir='/local_home/tim/pxpp/save'#, help='Location for parameter checkpoints and samples')
+args.save_dir=r'C:\Users\justjo\PycharmProjects\pixel-cnn\model_checkpoints'#, help='Location for parameter checkpoints and samples')
 args.data_set='cifar'#, help='Can be either cifar|imagenet')
-args.save_interval=20 #, help='Every how many epochs to write checkpoint/samples?')
+args.save_interval=1 #, help='Every how many epochs to write checkpoint/samples?')
 args.load_params=False
 # model
 args.nr_resnet=5 #, help='Number of residual blocks per stage of the model')
-args.nr_filters=30 #, help='Number of filters to use across the model. Higher = larger model.')
+args.nr_filters=120 #, help='Number of filters to use across the model. Higher = larger model.')
 args.nr_logistic_mix=10 #, help='Number of logistic components in the mixture. Higher = more flexible model')
 args.resnet_nonlinearity='concat_elu' #, help='Which nonlinearity to use in the ResNet layers. One of "concat_elu", "elu", "relu" ')
 args.class_conditional=False
@@ -74,9 +74,10 @@ args.learning_rate=0.001#, help='Base learning rate')
 args.lr_decay=0.999995#, help='Learning rate decay, applied every step of the optimization')
 args.batch_size=32#, help='Batch size during training per GPU')
 args.init_batch_size=16#, help='How much data to use for data-dependent initialization.')
-args.dropout_p=0.5#, help='Dropout strength (i.e. 1 - keep_prob). 0 = No dropout, higher = more dropout.')
+args.dropout_p=0#, help='Dropout strength (i.e. 1 - keep_prob). 0 = No dropout, higher = more dropout.')
 args.max_epochs=5000#, help='How many epochs to run in total?')
 args.nr_gpu=1#, help='How many GPUs to distribute the training across?')
+args.svd_mat = False
 # evaluation
 args.polyak_decay=0.9995#, help='Exponential decay rate of the sum of previous model iterates during Polyak averaging')
 args.num_samples=1#, help='How many batches of samples to output.')
@@ -104,9 +105,9 @@ elif args.data_set == 'imagenet':
     DataLoader = imagenet_data.DataLoader
 else:
     raise("unsupported dataset")
-train_data = DataLoader(args.data_dir, 'train', args.batch_size, rng=rng, shuffle=True, return_labels=args.class_conditional)
-val_data = DataLoader(args.data_dir, 'val', args.batch_size, shuffle=False, return_labels=args.class_conditional)
-test_data = DataLoader(args.data_dir, 'test', args.batch_size, shuffle=False, return_labels=args.class_conditional)
+train_data = DataLoader(args.data_dir, 'train', args.batch_size, rng=rng, shuffle=True, return_labels=args.class_conditional, svd_mat=args.svd_mat)
+val_data = DataLoader(args.data_dir, 'val', args.batch_size, shuffle=False, return_labels=args.class_conditional, svd_mat = train_data.svd_mat)
+test_data = DataLoader(args.data_dir, 'test', args.batch_size, shuffle=False, return_labels=args.class_conditional, svd_mat = train_data.svd_mat)
 obs_shape = train_data.get_observation_size() # e.g. a tuple (32,32,3)
 assert len(obs_shape) == 3, 'assumed right now'
 
@@ -238,6 +239,9 @@ saver = tf.train.Saver()
 args.path = os.path.join('checkpoint', 'nr_resnet{}_h{}nr_filters{}_{}'.format(
      args.nr_filters, args.nr_resnet, args.nr_logistic_mix,
     str(datetime.datetime.now())[:-7].replace(' ', '-').replace(':', '-')))
+
+ckpt_file = os.path.join(args.save_dir, str(datetime.datetime.now())[:-7].replace(' ', '-').replace(':', '-'), 'params_' + args.data_set + '.ckpt')
+
 writer = tf.summary.FileWriter(os.path.join('tensorboard', args.path))
 
 # //////////// perform training //////////////
@@ -248,43 +252,26 @@ val_bpd = []
 lr = args.learning_rate
 config = tf.ConfigProto()
 config.gpu_options.allow_growth = True
-with tf.Session(config=config) as sess:
-    for epoch in range(args.max_epochs):
-        begin = time.time()
+sess = tf.Session(config=config)
+test_sum_min = 999999
+# with tf.Session(config=config) as sess:
+for epoch in range(args.max_epochs):
+    begin = time.time()
 
-        # init
-        if epoch == 0:
-            train_data.reset()  # rewind the iterator back to 0 to do one full epoch
-            if args.load_params:
-                ckpt_file = args.save_dir + '/params_' + args.data_set + '.ckpt'
-                print('restoring parameters from', ckpt_file)
-                saver.restore(sess, ckpt_file)
-            else:
-                print('initializing the model...')
-                sess.run(initializer)
-                # feed_dict = make_feed_dict(train_data.next(args.init_batch_size), init=True)  # manually retrieve exactly init_batch_size examples
-                feed_dict = {x_init: train_data.next(args.init_batch_size).astype(np.float32)}
-                sess.run(init_pass, feed_dict)
-            print('starting training')
-
-        # train for one epoch
-        train_losses = []
-        mult = len([x for x in train_data])
-        for cnt, d in enumerate(train_data):
-            # feed_dict = make_feed_dict(d)
-            # forward/backward/update model on each gpu
-            # lr *= args.lr_decay
-            # feed_dict.update({ tf_lr: lr })
-            feed_dict = {xs: d}
-            l,_, train_summ = sess.run([bits_per_dim, optimizer, training_summary_batch], feed_dict)
-            writer.add_summary(train_summ, mult*epoch + cnt)
-            train_losses.append(l)
-        train_loss_gen = np.mean(train_losses)
-        feed_dict = {tf_loss_ph: train_loss_gen}
-        test_summ = sess.run(train_summary, feed_dict)
-        writer.add_summary(train_summ, epoch)
-
-        # compute likelihood over test data
+    # init
+    if epoch == 0:
+        train_data.reset()  # rewind the iterator back to 0 to do one full epoch
+        if args.load_params:
+            ckpt_file = args.save_dir + '/params_' + args.data_set + '.ckpt' ## put the checkpoint file loc here when restoring model
+            print('restoring parameters from', ckpt_file)
+            saver.restore(sess, ckpt_file)
+        else:
+            print('initializing the model...')
+            sess.run(initializer)
+            # feed_dict = make_feed_dict(train_data.next(args.init_batch_size), init=True)  # manually retrieve exactly init_batch_size examples
+            feed_dict = {x_init: train_data.next(args.init_batch_size).astype(np.float32)}
+            sess.run(init_pass, feed_dict)
+        ################ caluclate starting losses
         test_losses = []
         for d in test_data:
             # feed_dict = make_feed_dict(d)
@@ -292,41 +279,105 @@ with tf.Session(config=config) as sess:
             l = sess.run(bits_per_dim_test, feed_dict)
             test_losses.append(l)
         test_loss_gen = np.mean(test_losses)
-        test_bpd.append(test_loss_gen)
+        # test_bpd.append(test_loss_gen)
         feed_dict = {tf_loss_ph: test_loss_gen}
         test_summ = sess.run(test_summary, feed_dict)
         writer.add_summary(test_summ, epoch)
-
-        # compute likelihood over validation data
+        test_sum_min = test_loss_gen
+        ##################################
         val_losses = []
         for d in val_data:
             # feed_dict = make_feed_dict(d)
             feed_dict = {xs: d}
-            l= sess.run(bits_per_dim_val , feed_dict)
+            l = sess.run(bits_per_dim_val, feed_dict)
             val_losses.append(l)
         val_loss_gen = np.mean(val_losses)
         val_bpd.append(val_loss_gen)
         feed_dict = {tf_loss_ph: val_loss_gen}
         val_summ = sess.run(validation_summary, feed_dict)
         writer.add_summary(val_summ, epoch)
+        #########################################
+        train_losses = []
+        for cnt, d in enumerate(train_data):
+            # feed_dict = make_feed_dict(d)
+            # forward/backward/update model on each gpu
+            # lr *= args.lr_decay
+            # feed_dict.update({ tf_lr: lr })
+            feed_dict = {xs: d}
+            l = sess.run(bits_per_dim, feed_dict)
+            train_losses.append(l)
+        train_loss_gen = np.mean(train_losses)
+        feed_dict = {tf_loss_ph: train_loss_gen}
+        train_summ = sess.run(training_summary, feed_dict)
+        writer.add_summary(train_summ, epoch)
+        #######################################
+        print('starting training')
 
-        # log progress to console
-        print("Iteration %d, time = %ds, train bits_per_dim = %.4f, test bits_per_dim = %.4f" % (epoch, time.time()-begin, train_loss_gen, test_loss_gen))
-        sys.stdout.flush()
+    # train for one epoch
+    train_losses = []
+    mult = len([x for x in train_data])
+    for cnt, d in enumerate(train_data):
+        # feed_dict = make_feed_dict(d)
+        # forward/backward/update model on each gpu
+        # lr *= args.lr_decay
+        # feed_dict.update({ tf_lr: lr })
+        feed_dict = {xs: d}
+        l,_, train_summ = sess.run([bits_per_dim, optimizer, training_summary_batch], feed_dict)
+        writer.add_summary(train_summ, mult*epoch + cnt)
+        train_losses.append(l)
+    train_loss_gen = np.mean(train_losses)
+    feed_dict = {tf_loss_ph: train_loss_gen}
+    train_summ = sess.run(training_summary, feed_dict)
+    writer.add_summary(train_summ, epoch)
 
-        if epoch % args.save_interval == 0:
+    # compute likelihood over test data
+    test_losses = []
+    for d in test_data:
+        # feed_dict = make_feed_dict(d)
+        feed_dict = {xs: d}
+        l = sess.run(bits_per_dim_test, feed_dict)
+        test_losses.append(l)
+    test_loss_gen = np.mean(test_losses)
+    # test_bpd.append(test_loss_gen)
+    feed_dict = {tf_loss_ph: test_loss_gen}
+    test_summ = sess.run(test_summary, feed_dict)
+    writer.add_summary(test_summ, epoch)
 
-            # generate samples from the model
-            # sample_x = []
-            # for i in range(args.num_samples):
-            #     sample_x.append(sample_from_model(sess))
-            # sample_x = np.concatenate(sample_x,axis=0)
-            # img_tile = plotting.img_tile(sample_x[:100], aspect_ratio=1.0, border_color=1.0, stretch=True)
-            # img = plotting.plot_img(img_tile, title=args.data_set + ' samples')
-            # plotting.plt.savefig(os.path.join(args.save_dir,'%s_sample%d.png' % (args.data_set, epoch)))
-            # plotting.plt.close('all')
-            # np.savez(os.path.join(args.save_dir,'%s_sample%d.npz' % (args.data_set, epoch)), sample_x)
+    # compute likelihood over validation data
+    val_losses = []
+    for d in val_data:
+        # feed_dict = make_feed_dict(d)
+        feed_dict = {xs: d}
+        l= sess.run(bits_per_dim_val , feed_dict)
+        val_losses.append(l)
+    val_loss_gen = np.mean(val_losses)
+    val_bpd.append(val_loss_gen)
+    feed_dict = {tf_loss_ph: val_loss_gen}
+    val_summ = sess.run(validation_summary, feed_dict)
+    writer.add_summary(val_summ, epoch)
 
-            # save params
-            saver.save(sess, args.save_dir + '/params_' + args.data_set + '.ckpt')
-            np.savez(args.save_dir + '/test_bpd_' + args.data_set + '.npz', test_bpd=np.array(test_bpd))
+    # log progress to console
+    print("Iteration %d, time = %ds, train bits_per_dim = %.4f, test bits_per_dim = %.4f" % (epoch, time.time()-begin, train_loss_gen, test_loss_gen))
+    sys.stdout.flush()
+
+    if test_sum_min > test_loss_gen:
+        test_sum_min = test_loss_gen
+        saver.save(sess, ckpt_file)
+    # if epoch % args.save_interval == 0:
+    #
+        # generate samples from the model
+        # sample_x = []
+        # for i in range(args.num_samples):
+        #     sample_x.append(sample_from_model(sess))
+        # sample_x = np.concatenate(sample_x,axis=0)
+        # img_tile = plotting.img_tile(sample_x[:100], aspect_ratio=1.0, border_color=1.0, stretch=True)
+        # img = plotting.plot_img(img_tile, title=args.data_set + ' samples')
+        # plotting.plt.savefig(os.path.join(args.save_dir,'%s_sample%d.png' % (args.data_set, epoch)))
+        # plotting.plt.close('all')
+        # np.savez(os.path.join(args.save_dir,'%s_sample%d.npz' % (args.data_set, epoch)), sample_x)
+
+        # save params
+        # saver.save(sess, ckpt_file)
+        # np.savez(args.save_dir + '/test_bpd_' + args.data_set + '.npz', test_bpd=np.array(test_bpd))
+
+sess.close()
